@@ -1,0 +1,137 @@
+				CONCATENATE FILES (xhw1)
+
+INTRODUCTION
+	
+	xhw1 - concatenate infiles to outfile
+
+SYNTAX
+	
+	xhw1 [flags] outfile infile1 infile2...
+
+DESCRIPTION
+	
+	xhw1 concatenates the specified infiles to one outfile. The specified 		outfile could be a new file or an existing file which needs to be 		appended with the new content or truncated with the new content. The 		user can specify maximum 10 number of infiles. Specifying at least one 		outfile	and one infile is mandatory. If the outfile is not existing, it 	would be created by default with permissions 550. If the call executes 		successfully, it returns the number of bytes written. In case of failure	,it returns the appropriate error message and error number. Specifying 		flags is optional. The different flags which can be used are described 		below:
+	
+	-a: O_APPEND (append mode)
+
+	The outfile should be an existing file which would be appended with the 	new content. The call will error out if file is not existing.
+	
+	-c: O_CREAT (create mode)
+
+	The outfile specified in call will be created if it doesn't exists. The 	file will be created with the permissions specidfied by -m flag. If not		specified, then it will be created with 550. Note that the call will not 	return an error if the file exists and user specifies -c as flag.
+
+	-t: O_TRUNC (truncate mode)
+
+	The outfile should be an existing file which would be first truncated		and then the new content will be written to it. The call will return an		error if the specified out file doesn't exist.
+
+	-e: O_EXCL
+
+	O_EXCL when used with -c ensures that the outfile is created. However, 		if file already exists, it returns an error. 
+
+	-A: Atomic concat mode
+
+	This mode ensures that either all the infiles are successfully written,		or non of them are written. Enabling this flag excludes the feature of 		partial write. If the read/write operation is hindered by any possible		way, the call reverts back all the changes and returns an error.
+
+	-N: return number of files instead of number of bytes written
+	
+	This flag changes the return mode of the call. If -N is specified, the		call will return number of files successfully written rather than number	of bytes processed.
+	
+	-P: return percentage of data written out
+	
+	This flag also changes the return mode of the call. If -P is specified,		the call returns the percentage of data written rather than number of 		bytes processed.
+
+	-m ARG: set default mode to ARG
+	
+	This flag holds good with create option only. Though it does not return 	an error if specified with other modes too. If a new file is to be 		created, this flag specifies the permisions with which the new file 		should be created. If -m is selected, then it is mandatory to pass ARG,		else the call will return an error.
+
+	-h: print short usage string
+	
+	This flag prints a short help message defining the usage of the call.
+	
+APPROACH
+	
+	This call is implemented using a user level program and a loadable 		kernel module. The following steps briefly describes how the call 		works.
+	
+	// user level program
+	
+	1) The user level program takes the input parameters from the command		line and perform serveral first hand validations and returns an error 		specifying invalid arguments if any validation fails. Validations 		includes:
+
+		i) Mandatory infiles and outfile.
+		ii) Proper permission mode specified. Only a maximum of 4 digit 		octal number is valid.
+		ii) Improper combination of flags specified like specifying -N 			and -P together.
+		iii) Number of infiles cannot exceed 10.
+
+	2) Once the validations are done, the user level program defaults the		unspecified flags.
+
+	3) After defaulting, user level program packs all the arguments in a 		structure and passes a void pointer to this structure to kernel module.
+	
+	// execution switches from user level program to kernel module
+
+	4) Kernel module validates the pointer specified for bad addresses, etc. 	and copies the structure of arguments from user address space to kernel 	address space by allocating memory in kernel space. It returns an error 	if no memory is available.
+
+	5) It checks if extra credit is defined and returns an error if the call 	is to be run in atomic mode and atomic mode is not defined.
+
+	6) Kernel module now validates the file name pointers for bad addresses, 	etc. and again copy the file names from user address space to kernel		kernel address space by allocating the required memory. It returns an		error, if no memory is available.
+
+	7) Kernel module validates the mode specified with -m flag. The valid 		mode is a maximum of 4 digits octal number.
+
+	8) Kernel module now validates the flags specified by the user and 		returns error for invalid combinations of flags like specifying -N and 		-P together.
+
+	9) Now kernel module validates the infiles and outfiles for following 		things and returns an error if any validation fails:
+
+		i) All the infiles specified exists and are readable.
+		ii) The outfile exists and is writeable in case of trucnate and 		append.
+		iii) Validates all the oflags combinations.
+		iv) Validates if any infile specified is not the outfile.
+		v) If the call is running in extra credit mode, it creates a 			temp file and checks for valid oflag combinations.
+
+	10) At this point, kernel has validated all the required things and is 		ready to perform read/write.
+
+	11) Kernel allocates a temporary buffer of PAGE_SIZE and returns an 		error if allocation fails.
+
+	12) If call is in non atomic mode then kernel loops through all the 		infiles and read the content one by one to the buffer allocated above. 		Once the first file is read sucessfully, it us then written to the 		outfile and the loop continues. If the call is in atomic mode the 		program jumps to step 15.
+
+
+	13) If any error in reading occurs, then that file is skipped and the 		operation continues. However, if the error occurs in writing, the 		program is terminated with proper error message. The outfile persists		with partial written data.
+
+	14) If the size of the infiles specified is more than our temporary 		buffer, then the file is read/written in loop.
+	
+	15) If the call is running in atomic mode, the oflags are checked and 		old outfile is copied to temp file in case of append and create.
+
+	16) Again, the infiles are read in loop. But this time if any error 		occurs while reading/writing, the call is terminated with proper error		message and the temp file is deleted.
+
+	17) Large files are again read and written in loop.
+
+	18) If reading/writing of all files is successful then the temp file is		renamed to outfile else the temp file is unlinked.
+
+	19) All the resources used till now in kernel are released and the 		program is returned to user level with number of bytes written. Also, if 	at any point the call fails, always the kernel resources are released 		before returning to user program.
+
+	// execution switched from kernel module to user level program
+
+	20) Here, appropriate error/success message is printed.
+	
+	21) The resources used in user program are released and the program 		terminates.
+
+EXTRA CREDIT:
+	
+	The extra credit code if wrapped in ifdef--endif structure. To compile 		the call to support atomic mode, KCPPFLAGS is set to -DEXTRA_CREDIT.		This modification to make command is added in Makefile. If the user 		needs to remove the atomic mode's functionality, then KCPPFLAGS should		be removed from Makefile and the code should be recompiled. In this case	, if the user tries to run the call in atomic mode, the call returns an 	error stating that the atomic mode is not defined.
+	
+	NOTE: In extra credit mode, it is necessary to remove any file 			permission masks if present. It can be removed using:
+	
+	# umask 000
+	
+	If the mask is not removed and call is executed in atomic mode, file 		permissions of existing outfile may not be preserved. This is beacuse		open command will try to open a new temp file with the existing file 		permissions which may not get enforced due to pertaining mask.
+
+FILES FOR SUBMISSION:
+
+	1) xhw1.c: user level program
+
+	2) sys_xconcat.c: kernel module
+
+	3) Makefile: for compiling the user level program and kernel module
+
+	4) install_module.sh: to load and remove kernel module
+
+	5) README: Documentation of the call
+
+	6) kernel.config: configuration file for compiling the kernel
